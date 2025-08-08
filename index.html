@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Trampa de Palillos Animada con Control</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px;}
+  label { display: block; margin-top: 10px; }
+  svg { border: 1px solid #ccc; background: #f9f9f9; display: block; margin: 20px 0; overflow: visible; }
+  button { margin: 5px 5px 5px 0; padding: 6px 12px; }
+  #controls { margin-top: 10px; }
+  /* Líneas de aire */
+  .airLine {
+    stroke: #1E90FF;
+    stroke-width: 2;
+    stroke-linecap: round;
+    opacity: 0.6;
+  }
+  .arrowHead {
+    fill: #1E90FF;
+    opacity: 0.8;
+  }
+</style>
+</head>
+<body>
+
+<h2>Simulación trampa de palillos</h2>
+
+<label>
+  Ángulo β (grados): <span id="betaVal">30</span>
+  <input type="range" id="beta" min="0" max="60" step="0.1" value="30" />
+</label>
+
+<label>
+  Velocidad del aire V (m/s): <span id="velVal">35</span>
+  <input type="range" id="vel" min="0" max="50" step="0.1" value="35" />
+</label>
+
+<label>
+  Coeficiente de fricción μ: <span id="muVal">0.4</span>
+  <input type="range" id="mu" min="0" max="1" step="0.01" value="0.4" />
+</label>
+
+<!-- NUEVOS SLIDERS -->
+<label>
+  Largo del palillo (mm): <span id="lengthVal">50</span>
+  <input type="range" id="length" min="10" max="100" step="1" value="50" />
+</label>
+
+<label>
+  Ancho del palillo (mm): <span id="heightVal">3</span>
+  <input type="range" id="height" min="1" max="20" step="0.1" value="3" />
+</label>
+
+<label>
+  Espesor del palillo (mm): <span id="thicknessVal">3</span>
+  <input type="range" id="thickness" min="1" max="20" step="0.1" value="3" />
+</label>
+
+<label>
+  Densidad del MDF (kg/m³): <span id="densityVal">700</span>
+  <input type="range" id="density" min="300" max="1200" step="10" value="700" />
+</label>
+
+<p>
+  Fuerza de arrastre (N): <span id="Fval">-</span><br />
+  Peso (N): <span id="Wval">-</span><br />
+  Margen de deslizamiento: <span id="marginVal">-</span><br />
+  ¿Desliza?: <span id="slideVal">-</span>
+</p>
+
+<svg id="canvas" width="400" height="300" viewBox="0 0 400 300" >
+  <!-- Grupo para líneas de aire con flechas -->
+  <g id="airLines"></g>
+
+  <!-- Rejilla: línea negra inclinada -->
+  <line id="rejilla" x1="300" y1="50" x2="100" y2="250" stroke="black" stroke-width="3"/>
+  <!-- Palillo: rectángulo marrón -->
+  <rect id="palillo" width="10" height="40" fill="#6b4c3b" />
+</svg>
+
+<div id="controls">
+  <button id="playBtn">Play</button>
+  <button id="stopBtn">Stop</button>
+  <button id="resetBtn">Reset</button>
+</div>
+
+<script>
+// Constantes físicas
+const rho_air = 1.2; // kg/m3
+const Cd = 1.0;
+const g = 9.81;
+
+// Funciones auxiliares
+function mm_to_m(mm){ return mm / 1000; }
+function deg2rad(deg){ return deg * Math.PI / 180; }
+
+// Fuerza de arrastre
+function drag_force(V, A_proj){
+  let q = 0.5 * rho_air * V*V;
+  return q * Cd * A_proj;
+}
+
+// Descomposición fuerzas
+function components_on_inclined_screen(F, W, beta_deg, mu){
+  let b = deg2rad(beta_deg);
+  let F_n = F * Math.cos(b);
+  let F_t = F * Math.sin(b);
+  let W_n_abs = W * Math.sin(b);
+  let W_t = W * Math.cos(b);
+  let N = F_n - W_n_abs;
+  let T_down = F_t + W_t;
+  let F_fric_max = mu * Math.max(N,0);
+  let margin = T_down - F_fric_max;
+  return {N, margin};
+}
+
+// Referencias a DOM
+const svg = document.getElementById("canvas");
+const palillo = document.getElementById("palillo");
+const rejilla = document.getElementById("rejilla");
+const airLinesGroup = document.getElementById("airLines");
+
+const betaSlider = document.getElementById("beta");
+const velSlider = document.getElementById("vel");
+const muSlider = document.getElementById("mu");
+
+const lengthSlider = document.getElementById("length");
+const heightSlider = document.getElementById("height");
+const thicknessSlider = document.getElementById("thickness");
+const densitySlider = document.getElementById("density");
+
+const betaVal = document.getElementById("betaVal");
+const velVal = document.getElementById("velVal");
+const muVal = document.getElementById("muVal");
+
+const lengthVal = document.getElementById("lengthVal");
+const heightVal = document.getElementById("heightVal");
+const thicknessVal = document.getElementById("thicknessVal");
+const densityVal = document.getElementById("densityVal");
+
+const Fval = document.getElementById("Fval");
+const Wval = document.getElementById("Wval");
+const marginVal = document.getElementById("marginVal");
+const slideVal = document.getElementById("slideVal");
+
+// Posición inicial rejilla
+const rejillaX1 = 300, rejillaY1 = 50;
+const rejillaLength = Math.sqrt((100 - rejillaX1)**2 + (250 - rejillaY1)**2);
+
+// Variables control animación
+let animationId = null;
+let startTime = null;
+let slideOffset = 0;
+let isPlaying = false;
+
+// Parámetros líneas de aire estáticas con flechas
+const nAirLines = 7;
+const airLineLength = 50;
+const airLineSpacing = 30;
+const arrowSize = 8; // tamaño flecha
+
+// Crear líneas estáticas con flechas
+for(let i=0; i<nAirLines; i++){
+  let y = 40 + i * airLineSpacing;
+
+  // Línea principal (de derecha a izquierda)
+  let line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("class", "airLine");
+  line.setAttribute("x1", 380);
+  line.setAttribute("y1", y);
+  line.setAttribute("x2", 380 - airLineLength);
+  line.setAttribute("y2", y);
+  airLinesGroup.appendChild(line);
+
+  // Flecha (triángulo apuntando a la izquierda)
+  let arrow = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  arrow.setAttribute("class", "arrowHead");
+  let xTip = 380 - airLineLength;
+  let yTip = y;
+  let points = [
+    `${xTip},${yTip}`,                          
+    `${xTip + arrowSize},${yTip - arrowSize/2}`, 
+    `${xTip + arrowSize},${yTip + arrowSize/2}`  
+  ].join(" ");
+  arrow.setAttribute("points", points);
+  airLinesGroup.appendChild(arrow);
+}
+
+// Velocidad base para deslizamiento (px/s)
+const baseSlideSpeed = 30; 
+
+function update(timestamp){
+  if(!startTime) startTime = timestamp;
+
+  // Leer valores de sliders
+  let beta = parseFloat(betaSlider.value);
+  let V = parseFloat(velSlider.value);
+  let mu = parseFloat(muSlider.value);
+
+  let L_mm = parseFloat(lengthSlider.value);
+  let H_mm = parseFloat(heightSlider.value);
+  let t_mm = parseFloat(thicknessSlider.value);
+  let rho_mdf = parseFloat(densitySlider.value);
+
+  // Actualizar textos sliders
+  betaVal.textContent = beta.toFixed(1);
+  velVal.textContent = V.toFixed(1);
+  muVal.textContent = mu.toFixed(2);
+
+  lengthVal.textContent = L_mm.toFixed(0);
+  heightVal.textContent = H_mm.toFixed(1);
+  thicknessVal.textContent = t_mm.toFixed(1);
+  densityVal.textContent = rho_mdf.toFixed(0);
+
+  // Calcular áreas y volúmenes según inputs
+  const A_proj = mm_to_m(L_mm) * mm_to_m(H_mm);
+  const volume = mm_to_m(L_mm) * mm_to_m(H_mm) * mm_to_m(t_mm);
+  const mass = rho_mdf * volume;
+  const W = mass * g;
+
+  // Calculo fuerza arrastre
+  let F = drag_force(V, A_proj);
+  Fval.textContent = F.toFixed(4);
+  Wval.textContent = W.toFixed(4);
+
+  // Fuerzas descompuestas
+  let {N, margin} = components_on_inclined_screen(F, W, beta, mu);
+  marginVal.textContent = margin.toFixed(4);
+
+  // ¿Desliza?
+  let desliza = margin > 0;
+  slideVal.textContent = desliza ? "Sí" : "No";
+
+  // Ángulo en rad para SVG (inclinación de rejilla)
+  let betaRad = deg2rad(beta);
+
+  // Actualizar posición y rotación rejilla
+  let x1 = rejillaX1;
+  let y1 = rejillaY1;
+  let x2 = x1 - rejillaLength * Math.sin(betaRad);
+  let y2 = y1 + rejillaLength * Math.cos(betaRad);
+  rejilla.setAttribute("x1", x1);
+  rejilla.setAttribute("y1", y1);
+  rejilla.setAttribute("x2", x2);
+  rejilla.setAttribute("y2", y2);
+
+  // Actualizar tamaño y posición del palillo
+  palillo.setAttribute("width", mm_to_m(H_mm) * 1000 * 1.6); // Escalado para visual en px, ajusta 0.8 si quieres
+  palillo.setAttribute("height", mm_to_m(L_mm) * 1000 * 0.8);
+
+  // Animar palillo
+  if(desliza && isPlaying){
+    let elapsed = (timestamp - startTime) / 1000; // segundos
+    
+    // Aquí la velocidad aumenta con margin, limitada para no ser muy rápida
+    let speed = baseSlideSpeed + Math.min(margin * 1000, 150); // px/s base + escala del margin
+    
+    slideOffset = speed * elapsed;
+    if(slideOffset > rejillaLength) slideOffset = rejillaLength;
+  } else if(!desliza){
+    slideOffset = 0;
+    startTime = timestamp;
+  }
+
+  // Vector unitario a lo largo de la rejilla
+  let ux = (x2 - x1)/rejillaLength;
+  let uy = (y2 - y1)/rejillaLength;
+
+  // Posición palillo bajando por la rejilla si desliza
+  let px = x1 + ux * slideOffset;
+  let py = y1 + uy * slideOffset;
+
+  // Aquí corregimos la rotación para que coincida el sentido
+  palillo.setAttribute("transform", `translate(${px},${py}) rotate(${beta})`);
+  palillo.setAttribute("x", 0);
+  palillo.setAttribute("y", 0);
+
+  if(isPlaying) {
+    animationId = requestAnimationFrame(update);
+  }
+}
+
+// Control botones
+const playBtn = document.getElementById("playBtn");
+const stopBtn = document.getElementById("stopBtn");
+const resetBtn = document.getElementById("resetBtn");
+
+playBtn.onclick = () => {
+  if(!isPlaying){
+    isPlaying = true;
+    startTime = null;
+    animationId = requestAnimationFrame(update);
+  }
+};
+
+stopBtn.onclick = () => {
+  if(isPlaying){
+    isPlaying = false;
+    if(animationId) cancelAnimationFrame(animationId);
+  }
+};
+
+resetBtn.onclick = () => {
+  isPlaying = false;
+  if(animationId) cancelAnimationFrame(animationId);
+  slideOffset = 0;
+  startTime = null;
+  update(performance.now());
+};
+
+// Inicializar con estado parado y valores iniciales
+update(performance.now());
+
+</script>
+
+</body>
+</html>
